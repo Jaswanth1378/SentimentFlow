@@ -33,20 +33,20 @@ class ModelTrainer:
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         
         def tokenize_function(examples):
-            return self.tokenizer(
+            tokenized = self.tokenizer(
                 examples["text"],
                 padding=False,
                 truncation=True,
                 max_length=Config.TRAINING_CONFIG["max_seq_length"]
             )
+            tokenized["labels"] = examples["label"]
+            return tokenized
         
         self.dataset = self.dataset.map(
             tokenize_function,
             batched=True,
-            remove_columns=self.dataset["train"].column_names
+            remove_columns=["text"]
         )
-        
-        self.dataset = self.dataset.rename_column("label", "labels")
         
         return self.dataset
     
