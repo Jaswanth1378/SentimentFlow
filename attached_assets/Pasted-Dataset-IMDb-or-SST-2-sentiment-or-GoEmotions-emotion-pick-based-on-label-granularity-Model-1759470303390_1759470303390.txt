@@ -1,0 +1,456 @@
+Dataset: IMDb or SST-2 (sentiment) or GoEmotions (emotion) — pick based on label granularity.
+
+Model: DistilBERT / TinyBERT base → fine-tune with LoRA (PEFT) for speed and checkpoint size; full-finetune is OK if you have GPU and time.
+
+Frameworks: PyTorch + Hugging Face Transformers + PEFT (for LoRA) + Datasets.
+
+Orchestration / DAG: LangGraph for nodes (InferenceNode, ConfidenceCheckNode, FallbackNode).
+
+CLI: Python Click or Typer for interactive CLI loop.
+
+Logging: Structured JSON logs (timestamp, input, raw_probs, pred_label, confidence, node, fallback_reason, user_response).
+
+Metrics & monitoring: Hugging Face Hub for model upload; WandB for experiment tracking; optional lightweight dashboard (Streamlit) for confidence stats.
+
+Packaging: requirements.txt + Dockerfile + Makefile.
+
+Bonus fallback: zero-shot backup using Hugging Face zero-shot-classification pipeline OR an ensemble with a small TF-IDF+LogReg model.
+
+Detailed tech stack & rationale
+Core ML / Training
+
+Python 3.10+
+
+PyTorch
+
+Hugging Face Transformers
+
+datasets (Hugging Face)
+
+peft (LoRA) + bitsandbytes if using 8-bit optimizations
+
+accelerate for multi-GPU and mixed precision
+
+evaluate (Hugging Face) or scikit-learn metrics (accuracy / F1 / ROC-AUC where relevant)
+
+Why: HF ecosystem gives easy dataset access, training loops and model hub integration. LoRA (PEFT) reduces VRAM, speeds training, produces small checkpoints.
+
+Orchestration & Workflow
+
+LangGraph (for DAG nodes)
+
+Python classes for nodes: InferenceNode, ConfidenceCheckNode, FallbackNode
+
+Optional: Prefect or simple asyncio for background tasks (not required)
+
+Why: LangGraph lets you represent DAG nodes and decision flows cleanly and is required by the assignment.
+
+CLI & Interaction
+
+Typer (fast, modern CLI with interactive prompts) or Click
+
+Prompt-toolkit (optional) for better interactive UX
+
+Backup / fallback models
+
+Hugging Face zero-shot classification pipeline (for immediate robust alternative)
+
+A lightweight TF-IDF + LogisticRegression (sklearn) that’s cheap and fast to run as backup
+
+Logging & Observability
+
+Logging: Python logging with JSON formatter or structlog
+
+Persist logs to logs/app.log (rotating) and logs/app.jsonl (structured)
+
+Experiment tracking: Weights & Biases (WandB) or simple CSV logs
+
+Packaging & Reproducibility
+
+requirements.txt + environment.yml (conda) + Dockerfile
+
+Makefile for common tasks (train, eval, run-cli)
+
+GitHub Actions for linting and unit tests
+
+Extras to look professional
+
+Unit tests (pytest) for node logic and CLI flows
+
+A small integration test that runs the CLI through a mocked fallback
+
+README with runbook + demo script + checkpoints
+
+Demo video script and short recorded run (2–4 min)
+
+Provide an HF Hub link or zipped model file
+
+Small dashboard or CLI histogram of fallback frequency
+
+CI that runs tests on PRs and builds docker image
+
+Architecture & flow (high level)
+
+User input (CLI) → passes text to LangGraph DAG root.
+
+InferenceNode: tokenizes input → model forward → softmax probabilities → returns label, probs.
+
+ConfidenceCheckNode: compute confidence (max prob or calibrated metric). If confidence >= threshold → accept. Else → trigger fallback.
+
+Threshold: default 0.75 (configurable).
+
+Consider temperature scaling or Platt scaling for better calibration.
+
+FallbackNode: two possible strategies:
+
+Ask user a clarifying binary question (human-in-the-loop).
+
+Or run backup model (zero-shot or TF-IDF ensemble). Combine user answer if provided.
+
+FinalDecisionNode: commit final label, log all steps, return to CLI.
+
+Concrete implementation details
+Confidence computation
+
+Basic: confidence = max(softmax_logits)
+
+Better: temperature scaling via validation set → improves calibration
+
+When using multi-label tasks or unbalanced labels use other metrics accordingly.
+
+Fallback strategies (implement 2)
+
+Clarification-first: Ask direct clarifying question (yes/no or multiple choice) — best for human-in-loop.
+
+Model escalation: If user not available, run backup model(s): zero-shot or classical ML ensemble. If models disagree, escalate to human.
+
+Thresholds
+
+Default: 0.75 (accept), 0.50 - 0.75 (ask clarification), <0.50 (escalate to backup/forced clarify).
+
+Make thresholds configurable via config.yaml.
+
+Logging schema (JSON lines)
+
+Each log line is a JSON object:
+
+{
+  "timestamp": "2025-10-03T12:00:00+05:30",
+  "request_id": "uuid4",
+  "input_text": "The movie was painfully slow and boring.",
+  "inference": {
+    "pred_label": "Positive",
+    " probs": {"Positive": 0.54, "Negative": 0.46},
+    "confidence": 0.54
+  },
+  "confidence_check": {
+    "threshold": 0.75,
+    "status": "LOW"
+  },
+  "fallback": {
+    "activated": true,
+    "strategy": "clarification",
+    "question": "Could you clarify your intent? Was this a negative review?",
+    "user_response": "Yes, it was definitely negative."
+  },
+  "final_decision": {
+    "label": "Negative",
+    "via": "user_clarification"
+  }
+}
+
+CLI UX
+
+python -m app.run launches program
+
+Example flow:
+
+> Enter text (or 'quit'):
+The movie was painfully slow and boring.
+[InferenceNode] Predicted label: Positive | Confidence: 54%
+[ConfidenceCheckNode] Confidence too low. Triggering fallback...
+[FallbackNode] Could you clarify your intent? Was this a negative review? (y/n)
+> y
+Final Label: Negative (Corrected via user clarification)
+
+File structure (recommended)
+self_healing_classifier/
+├─ README.md
+├─ Makefile
+├─ Dockerfile
+├─ requirements.txt
+├─ environment.yml
+├─ src/
+│  ├─ app/
+│  │  ├─ __init__.py
+│  │  ├─ cli.py                # Typer CLI
+│  │  ├─ config.py             # thresholds, model paths
+│  │  ├─ logger.py             # structured logger
+│  │  ├─ nodes/
+│  │  │  ├─ __init__.py
+│  │  │  ├─ inference_node.py
+│  │  │  ├─ confidence_node.py
+│  │  │  ├─ fallback_node.py
+│  │  │  └─ final_decision_node.py
+│  │  ├─ model/
+│  │  │  ├─ trainer.py
+│  │  │  ├─ load_model.py
+│  │  │  └─ lora_utils.py
+│  │  └─ utils/
+│  │     ├─ preprocessing.py
+│  │     └─ metrics.py
+│  └─ tests/
+│     ├─ test_nodes.py
+│     └─ test_cli_flow.py
+├─ data/
+│  └─ (download script or example)
+├─ demos/
+│  └─ demo_script.md
+└─ logs/
+   ├─ app.log
+   └─ app.jsonl
+
+Training checklist (quick)
+
+Prepare dataset (train/val/test) using HF datasets.
+
+Tokenize, create DataLoader.
+
+Use PEFT LoRA config; set r, alpha, dropout.
+
+Use accelerate with mixed-precision.
+
+Validate each epoch, save best checkpoint by validation metric (macro F1 if multi-class).
+
+Save training config + HF model card metadata for reproducibility.
+
+Sample LoRA hyperparams to try:
+
+r=8, alpha=32, dropout=0.1
+
+batch_size=16 (or 32), lr=5e-5 with AdamW, num_train_epochs=3-6
+
+Use weight_decay=0.01, warmup_steps=100
+
+Testing & evaluation
+
+Unit tests for:
+
+InferenceNode returns (label, probs)
+
+ConfidenceCheckNode triggers fallback per thresholds
+
+FallbackNode handles both user-interaction and backup model flows
+
+Integration test: simulate a low-confidence input and assert fallback activated and final decision recorded
+
+Evaluate:
+
+Accuracy, Precision, Recall, F1 on held-out test set
+
+Calibration: Expected Calibration Error (ECE) and reliability diagrams
+
+Fallback frequency on validation set (how often fallback triggers)
+
+Add a small evaluation report EVALUATION.md with metrics and examples.
+
+Bonus/professional features (to impress)
+
+Model card & HF Hub: Upload model to Hugging Face with training details and sample usage.
+
+Calibration step: Implement temperature scaling on validation set.
+
+Fallback analytics: CLI histogram showing fallback frequency and confidence curves over last N inputs.
+
+Auto-relabeling pipeline: Store clarified examples into a clarified/ dataset for continuous improvement.
+
+Small web UI: a Streamlit page to run inputs and visualize probabilities and fallback stats for reviewers.
+
+Dockerized demo: Provide docker-compose with model server + CLI wrapper.
+
+CI: GitHub Actions to run tests and linting.
+
+Deliverables checklist (map to assignment)
+
+ Fine-tuned model checkpoint + instructions / HF link
+
+ Source code (above structure)
+
+ README: how to fine-tune, run LangGraph DAG, CLI flow
+
+ Log file sample in /logs
+
+ Demo video recording showing CLI and DAG (2–4 minutes)
+
+[optional] Bonus backup model and analytics
+
+Demo script (2–4 minute video)
+
+0:00–0:20 — short intro and problem statement.
+
+0:20–1:00 — show architecture diagram and node descriptions.
+
+1:00–2:00 — run CLI: show high-confidence case (accepted), then low-confidence case that triggers fallback and user clarification; show logs file tail updating.
+
+2:00–3:00 — show training snapshot and metrics (or HF model card), show fallback analytics histogram.
+
+3:00–3:30 — wrap up and explain how to reproduce.
+
+Example commands / Make targets
+make install           # pip install -r requirements.txt
+make train             # run training pipeline (accelerate launch)
+make eval              # evaluate model on test set
+make run-cli           # run the CLI
+docker build -t shc .  # build docker image
+
+Sample code snippets (pseudocode)
+
+InferenceNode (simplified):
+
+class InferenceNode:
+    def __init__(self, model, tokenizer):
+        self.model = model
+        self.tokenizer = tokenizer
+
+    def run(self, text):
+        inputs = self.tokenizer(text, return_tensors="pt", truncation=True)
+        logits = self.model(**inputs).logits
+        probs = logits.softmax(dim=-1).detach().cpu().numpy()[0]
+        label_idx = probs.argmax()
+        confidence = float(probs[label_idx])
+        return {"label": label_idx, "probs": probs.tolist(), "confidence": confidence}
+
+
+ConfidenceCheckNode:
+
+class ConfidenceCheckNode:
+    def __init__(self, threshold_accept=0.75, threshold_ask=0.5):
+        self.t_accept = threshold_accept
+        self.t_ask = threshold_ask
+
+    def run(self, inference_output):
+        c = inference_output["confidence"]
+        if c >= self.t_accept:
+            return {"action": "accept"}
+        elif c >= self.t_ask:
+            return {"action": "ask_clarify"}
+        else:
+            return {"action": "escalate"}
+
+
+FallbackNode (clarify-first):
+
+class FallbackNode:
+    def __init__(self, backup_model=None):
+        self.backup_model = backup_model
+
+    def run(self, text, inference_output):
+        action = ...
+        if action == "ask_clarify":
+           question = f"Could you clarify? Did you mean negative sentiment?"
+           user_resp = input(question)
+           # convert user_resp to label etc.
+        else:
+           # run self.backup_model or zero-shot
+           pass
+
+Professional prompt for handing to an engineer or LLM
+Writing
+
+You are a senior ML/AI engineer (5+ years) tasked to implement an end-to-end Self-Healing Classification DAG as an ATG technical assignment. Build a reproducible repository that fine-tunes a transformer classifier, runs predictions inside a LangGraph DAG, measures confidence, and triggers a fallback (user clarification or backup model) for low-confidence predictions. Prioritize correctness, reproducibility, and clear human-in-the-loop UX.
+
+Deliverables (must):
+
+Trained model checkpoint (LoRA preferred) and instructions to reproduce training. Alternatively, upload model to Hugging Face and include download link.
+Full source code implementing the LangGraph DAG with nodes:
+InferenceNode: loads the trained model & tokenizer; returns pred_label, probs, confidence.
+ConfidenceCheckNode: computes confidence and determines accept | ask_clarify | escalate using configurable thresholds.
+FallbackNode: implements (a) clarification dialog with the user (CLI), (b) backup model fallback (zero-shot or small classical ML).
+FinalDecisionNode: persists final decision and returns to caller.
+CLI tool (Typer or Click) supporting interactive loop, clarifications, and final outputs with confidence.
+Structured JSON logging (logs/app.jsonl) with timestamps, request_id, inference outputs, fallback activations, user responses, and final decision.
+README.md with training, running, and demo instructions.
+demos/demo_script.md and a short demo video (2–4 minutes) showing the CLI and fallback workflow.
+
+Non-functional requirements:
+
+Use PyTorch + Hugging Face Transformers + datasets.
+Use PEFT (LoRA) for parameter-efficient fine-tuning; fallback to full-finetune if GPU/time allows.
+Use accelerate to support multi-GPU / mixed precision.
+Unit tests (pytest) for nodes and one integration test that simulates user clarification.
+Provide requirements.txt, Dockerfile, and Makefile for the main tasks.
+Use WandB or CSV logs for training metrics; include calibration/ECE computation in evaluation.
+Keep code modular and documented. Provide a simple architecture diagram in README.
+
+Design decisions & defaults:
+
+Dataset: choose one open dataset (IMDb / SST-2 / GoEmotions). Provide a small preprocessing script.
+Default acceptance threshold: 0.75. Clarify threshold: 0.50–0.75. Escalate threshold: <0.50. Make configurable in config.yaml.
+Confidence calculation: max(softmax_logits). Add optional temperature scaling for calibration (on validation).
+Fallback order: Clarification → backup model → escalate to human (if no user response).
+Backup model: HF zero-shot-classification pipeline OR a TF-IDF + LogisticRegression model bundled in src/models/backup.
+
+Logging schema (required):
+Each interaction written as newline-delimited JSON with keys:
+timestamp, request_id, input_text, inference: {label, probs, confidence}, confidence_check: {thresholds, status}, fallback: {activated, strategy, question, user_response}, final_decision: {label, via}.
+
+CLI UX examples (required):
+
+Accepted case:
+> Enter text:
+Amazing movie, I loved it.
+[InferenceNode] Predicted: Positive | Confidence: 0.92
+Final Label: Positive
+
+Low-confidence fallback:
+> Enter text:
+The movie was painfully slow and boring.
+[InferenceNode] Predicted: Positive | Confidence: 0.54
+[ConfidenceCheckNode] Confidence too low. Triggering fallback...
+[FallbackNode] Could you clarify? Was this a negative review? (y/n)
+> y
+Final Label: Negative (Corrected via user clarification)
+
+
+Testing & evaluation:
+
+Provide test scripts and one integration test that asserts fallback log entry and final decision correctness.
+Compute accuracy, precision, recall, F1 on held-out test set.
+Compute calibration metric (ECE). Include a small section in README explaining how to run the evaluation.
+
+Polish & extras (highly recommended):
+
+Add a script to aggregate clarified examples into data/clarified/ for future fine-tuning.
+Provide fallback-frequency histogram CLI (text histogram) and a confidence-trend CSV.
+Upload model to HF with model card listing dataset, LoRA config, training hyperparams.
+Dockerfile to run make run-cli.
+
+Time & deliverable expectations:
+
+Target: fully working prototype in 72 hours.
+This must include a recorded demo (2–4 minutes) demonstrating both accept and fallback flows and showing logs.
+
+Coding style & repo hygiene:
+
+Use consistent formatting (black, flake8), modular design, docstrings for public functions.
+Each major change should be a commit with descriptive message.
+README must contain exact commands to run training, evaluation, and CLI demo.
+
+Acceptance criteria:
+
+Model runs and returns predictions with confidences.
+Low-confidence inputs trigger fallback and log all actions.
+Final labels are stored in logs and visible in CLI.
+Repo includes instructions to reproduce training and run the DAG locally.
+
+If any resource (GPU, dataset size) becomes a limiting factor, implement a full, reproducible low-resource training pipeline (use smaller sample of dataset with same code paths) and document how to scale training to full data. Prioritize a working and tested pipeline over maximizing model metrics.
+
+Deliver this as a GitHub repository or zipped folder with the items above.
+
+If you want, I can now:
+
+generate the full requirements.txt + Dockerfile + Makefile for this project,
+
+scaffold the repo with starter code for the nodes (InferenceNode, ConfidenceCheckNode, FallbackNode) and CLI,
+
+or produce a ready-to-run Typer CLI script that simulates the flow (using a toy model or HF pipeline) so you can demo immediately.
